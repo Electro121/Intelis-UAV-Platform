@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ground Control Station</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root { --bg:#0d1117; --panel:#151b23; --bar:#11161d; --line:#222b36; --text:#e6ebf2; --dim:#8793a3;
+    --green:#3ecf8e; --amber:#f4b860; --red:#ef6b6b; --accent:#6ea8fe;
+    --font:"Inter","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:var(--font); overflow:hidden; }
+  button,input { font-family:inherit; }
+  #app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+  #topbar { display:flex; align-items:stretch; height:52px; background:var(--bar); border-bottom:1px solid var(--line); flex:none; overflow-x:auto; overflow-y:hidden; }
+  #brand { display:flex; align-items:center; padding:0 18px 0 12px; flex:none; }
+  #brand .logo { width:34px; height:34px; border-radius:9px; background:linear-gradient(135deg,#4b6fd8,#7a5cd6); display:grid; place-items:center; font-weight:700; font-size:12px; }
+  .tb-item { display:flex; align-items:center; gap:8px; padding:0 14px; font-size:16px; white-space:nowrap; flex:none; transition:opacity .3s,color .3s; }
+  .tb-item small { font-size:12px; color:var(--dim); }
+  .state-dot { width:10px; height:10px; border-radius:50%; background:var(--red); transition:background .3s; }
+  .state-dot.ok { background:var(--green); } .state-dot.warn { background:var(--amber); } .state-dot.fly { background:var(--accent); }
+  .batt { width:13px; height:24px; border:2px solid currentColor; border-radius:3px; position:relative; display:flex; align-items:flex-end; padding:1px; }
+  .batt::before { content:""; position:absolute; top:-5px; left:3px; width:5px; height:3px; background:currentColor; }
+  .batt i { display:block; width:100%; height:0; background:var(--green); border-radius:1px; }
+  .c-ok { color:var(--text); } .c-warn { color:var(--amber); } .c-bad { color:var(--red); }
+  .tb-item svg { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  body.stale .data, body.stale #hud { opacity:.4; }
+  #top-right { margin-left:auto; display:flex; align-items:center; gap:20px; padding:0 16px; flex:none; }
+  #clock-block { text-align:right; font-size:11px; color:var(--dim); line-height:1.3; }
+  #clock-block b { display:block; font-size:15px; color:var(--text); font-weight:600; }
+  #link-status { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--dim); white-space:nowrap; }
+  #link-dot { width:8px; height:8px; border-radius:50%; background:var(--red); }
+  #link-dot.warn { background:var(--amber); } #link-dot.live { background:var(--green); }
+
+  #alert-banner { display:none; padding:7px 16px; font-size:14px; font-weight:600; flex:none; }
+  #alert-banner.show { display:block; }
+  #alert-banner.sev-warn { background:#3b2f17; color:var(--amber); }
+  #alert-banner.sev-critical { background:#40201f; color:#ff9a92; }
+  #mode-row { display:flex; align-items:center; gap:6px; background:var(--panel); border-bottom:1px solid var(--line); padding:6px 12px; flex:none; overflow-x:auto; }
+  .mode-chip { padding:4px 11px; border-radius:14px; font-size:12px; color:var(--dim); border:1px solid var(--line); white-space:nowrap; transition:all .25s; }
+  .mode-chip.current { color:#06210f; background:var(--green); border-color:var(--green); font-weight:700; box-shadow:0 0 12px rgba(62,207,142,.35); }
+
+  #main { display:flex; flex:1; min-height:0; background:var(--bg); }
+  #map-panel { width:50%; flex:none; }
+  #right { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #video-panel { height:55%; flex:none; }
+  #log-panel { flex:1; min-height:0; }
+  .splitter { background:var(--bg); flex:none; position:relative; touch-action:none; z-index:5; }
+  .splitter::after { content:""; position:absolute; background:#334; border-radius:2px; transition:background .15s; }
+  .splitter:hover::after,.splitter.drag::after { background:var(--accent); }
+  #split-v { width:8px; cursor:col-resize; } #split-v::after { left:3px; top:calc(50% - 22px); width:2px; height:44px; }
+  #split-h { height:8px; cursor:row-resize; } #split-h::after { top:3px; left:calc(50% - 22px); height:2px; width:44px; }
+
+  .panel { position:relative; background:var(--panel); display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+  .panel-header { display:flex; align-items:center; justify-content:space-between; padding:7px 14px; background:var(--bar); border-bottom:1px solid var(--line); flex:none; }
+  .panel-header .title { font-size:13px; font-weight:600; }
+  .badge { font-size:12px; color:var(--dim); display:flex; align-items:center; gap:6px; }
+  .badge .dot { width:7px; height:7px; border-radius:50%; background:var(--green); } .badge .dot.bad { background:var(--red); }
+  .panel-body { position:relative; flex:1; min-height:0; overflow:hidden; }
+  .btn { background:rgba(21,27,35,.85); border:1px solid #3a4553; color:var(--text); font-size:12px; padding:6px 12px; border-radius:8px; cursor:pointer; transition:all .15s; }
+  .btn:hover { border-color:var(--accent); }
+
+  #map { width:100%; height:100%; background:#1b2028; }
+  .leaflet-control-attribution { background:rgba(0,0,0,.55) !important; color:#aaa !important; font-size:10px; }
+  .leaflet-control-attribution a { color:#ccc !important; }
+  #maptools { position:absolute; top:10px; left:10px; z-index:500; display:flex; flex-direction:column; background:rgba(13,17,23,.78); border:1px solid var(--line); border-radius:12px; overflow:hidden; backdrop-filter:blur(4px); }
+  .tool { width:68px; padding:10px 4px 8px; background:none; border:0; color:var(--text); font-size:11px; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:4px; transition:background .15s,opacity .15s; }
+  .tool:not(:disabled):hover { background:rgba(255,255,255,.08); }
+  .tool:disabled { opacity:.3; cursor:not-allowed; }
+  .tool.warn { color:var(--amber); }
+  .tool svg { width:24px; height:24px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  #hud { position:absolute; left:10px; bottom:26px; z-index:500; display:grid; grid-template-columns:repeat(4,auto); gap:4px 22px; background:rgba(13,17,23,.78); border:1px solid var(--line); border-radius:12px; padding:9px 14px; transition:opacity .3s; }
+  #hud div { font-size:11px; color:var(--dim); }
+  #hud b { display:block; font-size:17px; color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+  #compass { position:absolute; right:12px; bottom:28px; z-index:500; width:104px; height:104px; background:rgba(13,17,23,.78); border-radius:50%; border:1px solid var(--line); }
+  #compass text { fill:var(--text); font-size:11px; font-family:var(--font); text-anchor:middle; }
+  #hdg-text { position:absolute; bottom:20px; left:0; right:0; text-align:center; font-size:12px; font-weight:600; }
+  #toast { position:absolute; top:12px; left:50%; transform:translate(-50%,-20px); z-index:1100; padding:8px 16px; border-radius:20px; background:rgba(21,27,35,.95); border:1px solid var(--line); font-size:13px; opacity:0; pointer-events:none; transition:all .25s; }
+  #toast.show { opacity:1; transform:translate(-50%,0); } #toast.bad { border-color:var(--red); color:#ff9a92; } #toast.warn { border-color:var(--amber); color:var(--amber); }
+
+  #confirm { position:absolute; inset:0; z-index:1200; display:none; align-items:center; justify-content:center; background:rgba(5,8,12,.62); backdrop-filter:blur(3px); }
+  #confirm.show { display:flex; }
+  #confirm .card { width:min(420px,90%); background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:18px 20px; box-shadow:0 14px 44px rgba(0,0,0,.55); }
+  #c-title { font-size:18px; font-weight:600; } #c-text { color:var(--dim); font-size:13px; margin:6px 0 4px; }
+  #c-extra label { font-size:13px; color:var(--dim); } #c-extra input { width:70px; margin:0 6px; padding:5px 8px; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--text); }
+  #slider { position:relative; height:48px; border-radius:24px; background:var(--bg); border:1px solid var(--line); overflow:hidden; margin:14px 0 10px; touch-action:none; user-select:none; }
+  #s-text { position:absolute; inset:0; display:grid; place-items:center; font-size:13px; color:var(--dim); pointer-events:none; }
+  #thumb { position:absolute; top:3px; left:3px; width:62px; height:40px; border-radius:20px; background:var(--accent); color:#07111f; display:grid; place-items:center; font-weight:700; cursor:grab; touch-action:none; }
+
+  #video-feed { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
+  #video-placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:14px; pointer-events:none; }
+  .video-controls { position:absolute; bottom:10px; right:10px; }
+
+  #flipper { position:absolute; inset:0; perspective:1400px; }
+  #flip-in { position:absolute; inset:0; transition:transform .55s cubic-bezier(.3,.7,.2,1); transform-style:preserve-3d; }
+  #log-panel.flipped #flip-in { transform:rotateY(180deg); }
+  .face { position:absolute; inset:0; backface-visibility:hidden; -webkit-backface-visibility:hidden; background:var(--panel); }
+  #log-body { padding:10px 14px; overflow-y:auto; font-size:13px; line-height:1.7; }
+  #log-body::-webkit-scrollbar,#con-out::-webkit-scrollbar { width:6px; } #log-body::-webkit-scrollbar-thumb,#con-out::-webkit-scrollbar-thumb { background:#3a4553; }
+  .log-entry { display:flex; gap:12px; } .log-entry .ts { color:var(--dim); flex:none; font-variant-numeric:tabular-nums; }
+  .log-entry.level-ok .msg { color:var(--green); } .log-entry.level-warn .msg { color:var(--amber); } .log-entry.level-critical .msg { color:#ff9a92; }
+  #console { transform:rotateY(180deg); display:flex; flex-direction:column; pointer-events:none; }
+  #log-panel.flipped #console { pointer-events:auto; } #log-panel.flipped #log-body { pointer-events:none; }
+  #con-out { flex:1; margin:0; padding:10px 14px; overflow-y:auto; font:12px/1.45 ui-monospace,Consolas,monospace; white-space:pre-wrap; word-break:break-all; color:#c8d3e0; }
+  #con-row { display:flex; align-items:center; gap:8px; padding:6px 12px; border-top:1px solid var(--line); background:var(--bar); font:12px ui-monospace,Consolas,monospace; color:var(--green); }
+  #con-in { flex:1; background:none; border:0; outline:0; color:var(--text); font:inherit; }
+
+  @media (max-width:800px) {
+    #main { flex-direction:column; overflow-y:auto; }
+    #map-panel { width:100% !important; height:62vh; } #right { display:block; flex:none; }
+    #video-panel { height:42vh !important; } #log-panel { height:40vh; }
+    .splitter { display:none; } #clock-block { display:none; } .tb-item { padding:0 9px; font-size:14px; }
+    #hud { grid-template-columns:repeat(2,auto); } #hud b { font-size:15px; }
+  }
+</style>
+</head>
+<body class="stale">
+<div id="app">
+  <header id="topbar">
+    <div id="brand"><div class="logo">GCS</div></div>
+    <div class="tb-item"><span class="state-dot" id="ready-dot"></span><span id="ready-text">Disconnected</span></div>
+    <div class="tb-item data"><span id="stat-mode">—</span></div>
+    <div class="tb-item data" id="gps-item">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      <span id="stat-gps">—</span><small id="stat-fix"></small>
+    </div>
+    <div class="tb-item data" id="rc-item">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="11" r="1.5"/><path d="M12 12.5V21M8.5 7.5a5 5 0 0 1 7 0M5.5 4.5a9 9 0 0 1 13 0"/></svg>
+      <span id="stat-rc">—</span><small id="stat-rssi"></small>
+    </div>
+    <div class="tb-item data" id="batt-item"><div class="batt"><i id="batt-fill"></i></div><span id="stat-battery">—</span><small id="stat-volt"></small></div>
+    <div id="top-right">
+      <div id="clock-block">LOCAL TIME — DHAKA<b id="clock">—</b></div>
+      <div id="link-status"><div id="link-dot"></div><span id="link-text">Bridge: connecting</span></div>
+    </div>
+  </header>
+
+  <div id="alert-banner"><span id="alert-text"></span></div>
+  <div id="mode-row"></div>
+
+  <div id="main">
+    <section id="map-panel" class="panel">
+      <div class="panel-body">
+        <div id="map"></div>
+        <div id="maptools">
+          <button class="tool" id="t-takeoff"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="t-takeoff-l">Takeoff</span></button>
+          <button class="tool" id="t-rtl"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></svg>Return</button>
+          <button class="tool" id="t-arm"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5"/></svg><span id="t-arm-l">Arm</span></button>
+          <button class="tool" id="t-clear"><svg viewBox="0 0 24 24"><path d="M4 18c4-1 3-8 8-8s4-5 8-6"/></svg>Clear track</button>
+          <button class="tool" id="t-layer"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5"/></svg>Map type</button>
+        </div>
+        <div id="toast"></div>
+        <div id="hud">
+          <div>Altitude<b id="h-alt">—</b></div><div>Speed<b id="h-spd">—</b></div>
+          <div>Home distance<b id="h-home">—</b></div><div>Flight time<b id="h-time">00:00:00</b></div>
+        </div>
+        <div id="compass">
+          <svg viewBox="0 0 100 100" width="104" height="104">
+            <g id="rose"><text x="50" y="17">N</text><text x="86" y="54">E</text><text x="50" y="94">S</text><text x="14" y="54">W</text></g>
+            <path d="M50 28 L58 58 L50 52 L42 58 Z" fill="#ef6b6b"/>
+          </svg>
+          <div id="hdg-text">—</div>
+        </div>
+        <div id="confirm"><div class="card">
+          <div id="c-title"></div><div id="c-text"></div><div id="c-extra"></div>
+          <div id="slider"><div id="s-text">Slide to confirm</div><div id="thumb">›››</div></div>
+          <button class="btn" id="c-cancel">Cancel</button>
+        </div></div>
+      </div>
+    </section>
+
+    <div id="split-v" class="splitter" title="Drag to resize — double-click to reset"></div>
+
+    <div id="right">
+      <section id="video-panel" class="panel">
+        <div class="panel-header"><span class="title">Camera</span><span class="badge"><span class="dot" id="video-dot"></span><span id="video-badge-text">LIVE</span></span></div>
+        <div class="panel-body">
+          <img id="video-feed" alt="">
+          <div id="video-placeholder">No signal</div>
+          <div class="video-controls"><button class="btn" id="reload-video">Reload video</button></div>
+        </div>
+      </section>
+      <div id="split-h" class="splitter" title="Drag to resize — double-click to reset"></div>
+      <section id="log-panel" class="panel">
+        <div class="panel-header"><span class="title" id="log-title">Event Log</span><button class="btn" id="flip">MAVLink console ⇄</button></div>
+        <div class="panel-body"><div id="flipper"><div id="flip-in">
+          <div class="face" id="log-body"></div>
+          <div class="face" id="console">
+            <pre id="con-out"></pre>
+            <div id="con-row"><span>nsh&gt;</span><input id="con-in" autocomplete="off" spellcheck="false" placeholder="ver · commander status · listener vehicle_status   (Ctrl+C aborts)" disabled></div>
+          </div>
+        </div></div></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ---- Configuration ---------------------------------------------------
+  // Over HTTPS (Funnel) the browser needs wss:// — port 10000 is the Funnel/Serve port that forwards to the bridge (8765).
+  // Over plain HTTP (Tailscale IP / LAN) it talks to the bridge directly.
+  const TELEMETRY_WS_URL = location.protocol === "https:"
+    ? "wss://" + location.hostname + ":10000"
+    : "ws://" + (location.hostname || "localhost") + ":8765";
+  const VIDEO_URL = "https://aether.tail887bf8.ts.net/video.mjpeg";
+  // Operator token: open the page as  index.html#key=YOUR_TOKEN  to get controls. Without it the page is view-only.
+  const OP_KEY = new URLSearchParams(location.hash.slice(1)).get("key");
+  if (OP_KEY) history.replaceState(null, "", location.pathname + location.search);   // hide the token from the address bar
+  // -----------------------------------------------------------------------
+  const LOW_BATTERY_PCT = 20, LINK_LOSS_ALERT_S = 5, STALE_S = 3, MAX_LOG = 120, MAX_CON = 30000;
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : parseFloat(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+  };
+  const MODES = ["Manual", "Stabilized", "Acro", "Altitude", "Position", "Position Slow", "Hold", "Mission",
+                 "Takeoff", "Return", "Land", "Follow Target", "Precision Landing", "Offboard"];
+
+  let ws = null, wsOpen = false, linked = false, everLinked = false, lastState = null, isOperator = false;
+  let armedAt = null, frozenT = 0, busyUntil = 0, pending = null, videoLostSince = null, vidRetry = null;
+
+  // ---- Event log + toast ----
+  function logEvent(message, level) {
+    const e = document.createElement("div");
+    e.className = "log-entry level-" + (level || "info");
+    const ts = document.createElement("span"); ts.className = "ts";
+    ts.textContent = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Dhaka", hour12: false });
+    const m = document.createElement("span"); m.className = "msg"; m.textContent = message;
+    e.append(ts, m);
+    const body = $("log-body");
+    body.appendChild(e);
+    while (body.children.length > MAX_LOG) body.removeChild(body.firstChild);
+    body.scrollTop = body.scrollHeight;
+  }
+  let toastT;
+  function toast(msg, sev) {
+    const t = $("toast"); t.textContent = msg; t.className = "show " + (sev || "");
+    clearTimeout(toastT); toastT = setTimeout(() => { t.className = ""; }, 4000);
+  }
+  logEvent("Ground control station online");
+
+  // ---- Resizable panes ----
+  $("map-panel").style.width = store.get("gcs.mapW", 50) + "%";
+  $("video-panel").style.height = store.get("gcs.vidH", 55) + "%";
+  function bindSplitter(el, onMove, onReset) {
+    el.addEventListener("pointerdown", (e) => { el.setPointerCapture(e.pointerId); el.classList.add("drag"); });
+    el.addEventListener("pointermove", (e) => { if (el.classList.contains("drag")) onMove(e); });
+    ["pointerup", "pointercancel"].forEach((t) => el.addEventListener(t, () => el.classList.remove("drag")));
+    el.addEventListener("dblclick", onReset);
+  }
+  bindSplitter($("split-v"), (e) => {
+    const r = $("main").getBoundingClientRect();
+    const p = clamp((e.clientX - r.left) / r.width * 100, 25, 75);
+    $("map-panel").style.width = p + "%"; store.set("gcs.mapW", p);
+  }, () => { $("map-panel").style.width = "50%"; store.set("gcs.mapW", 50); });
+  bindSplitter($("split-h"), (e) => {
+    const r = $("right").getBoundingClientRect();
+    const p = clamp((e.clientY - r.top) / r.height * 100, 20, 80);
+    $("video-panel").style.height = p + "%"; store.set("gcs.vidH", p);
+  }, () => { $("video-panel").style.height = "55%"; store.set("gcs.vidH", 55); });
+
+  // ---- Flight-mode strip (lit from telemetry) ----
+  MODES.forEach((name) => {
+    const el = document.createElement("div");
+    el.className = "mode-chip"; el.textContent = name; el.dataset.mode = name;
+    $("mode-row").appendChild(el);
+  });
+  function setModeStrip(mode) {
+    document.querySelectorAll(".mode-chip").forEach((el) => el.classList.toggle("current", el.dataset.mode === mode));
+  }
+
+  // ---- Video ----
+  function reloadVideo() {
+    clearTimeout(vidRetry);
+    $("video-placeholder").style.display = "flex";
+    $("video-placeholder").textContent = "Connecting…";
+    $("video-badge-text").textContent = "CONNECTING";
+    $("video-feed").src = VIDEO_URL + (VIDEO_URL.includes("?") ? "&" : "?") + "t=" + Date.now();
+  }
+  $("reload-video").addEventListener("click", () => { logEvent("Operator reloaded camera feed"); reloadVideo(); });
+  $("video-feed").addEventListener("load", () => {
+    $("video-placeholder").style.display = "none";
+    $("video-badge-text").textContent = "LIVE"; $("video-dot").classList.remove("bad"); videoLostSince = null;
+  });
+  $("video-feed").addEventListener("error", () => {
+    $("video-placeholder").style.display = "flex";
+    $("video-placeholder").textContent = "No signal — retrying…";
+    $("video-badge-text").textContent = "LOST"; $("video-dot").classList.add("bad");
+    if (!videoLostSince) videoLostSince = Date.now();
+    clearTimeout(vidRetry); vidRetry = setTimeout(reloadVideo, 5000);
+  });
+  reloadVideo();
+
+  // ---- Clock ----
+  const tick = () => { $("clock").textContent = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Dhaka", hour12: false }); };
+  tick(); setInterval(tick, 1000);
+
+  // ---- Map ----
+  const map = L.map("map", { zoomControl: false }).setView([23.8103, 90.4125], 16);
+  L.control.zoom({ position: "topright" }).addTo(map);
+  const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Imagery &copy; Esri", maxZoom: 19 });
+  const street = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { attribution: "&copy; OpenStreetMap contributors", maxZoom: 19 });
+  sat.addTo(map);
+  let satOn = true;
+  $("t-layer").addEventListener("click", () => {
+    if (satOn) { map.removeLayer(sat); street.addTo(map); } else { map.removeLayer(street); sat.addTo(map); }
+    satOn = !satOn;
+  });
+  new ResizeObserver(() => map.invalidateSize()).observe($("map"));
+
+  const droneIcon = L.divIcon({ className: "", iconSize: [28, 28], iconAnchor: [14, 14],
+    html: '<div style="width:28px;height:28px"><svg viewBox="0 0 28 28" width="28" height="28"><path d="M14 2 L22 24 L14 19 L6 24 Z" fill="#ef6b6b" stroke="#fff" stroke-width="1.5"/></svg></div>' });
+  const homeIcon = L.divIcon({ className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+    html: '<div style="width:22px;height:22px;border-radius:50%;background:#3ecf8e;border:2px solid #fff;color:#06210f;font:700 12px sans-serif;display:grid;place-items:center">H</div>' });
+  let droneMarker = null, homeMarker = null, homePoint = null, hasCentered = false, followPausedUntil = 0;
+  let trackPts = [];
+  const flightPath = L.polyline([], { color: "#f4d35e", weight: 3, opacity: 0.85 }).addTo(map);
+  // Map follows the vehicle automatically; dragging pauses it for 20 s, tapping the vehicle resumes it.
+  map.on("dragstart", () => { followPausedUntil = Date.now() + 20000; });
+  $("t-clear").addEventListener("click", () => { trackPts = []; flightPath.setLatLngs([]); logEvent("Flight track cleared"); });
+
+  const rad = (d) => d * Math.PI / 180;
+  function distanceMeters(a1, o1, a2, o2) {
+    const x = Math.sin(rad(a2 - a1) / 2) ** 2 + Math.cos(rad(a1)) * Math.cos(rad(a2)) * Math.sin(rad(o2 - o1) / 2) ** 2;
+    return 6371000 * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  function updateMap(s) {
+    if (s.home_lat != null && s.home_lon != null) {
+      homePoint = { lat: s.home_lat, lon: s.home_lon };
+      if (!homeMarker) homeMarker = L.marker([s.home_lat, s.home_lon], { icon: homeIcon }).addTo(map);
+      else homeMarker.setLatLng([s.home_lat, s.home_lon]);
+    }
+    if (s.lat == null || s.lon == null) return;
+    const ll = [s.lat, s.lon];
+    if (!droneMarker) {
+      droneMarker = L.marker(ll, { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+      droneMarker.on("click", () => { followPausedUntil = 0; map.panTo(droneMarker.getLatLng()); });
+    } else droneMarker.setLatLng(ll);
+    if (s.heading_deg != null) droneMarker.getElement().firstChild.style.transform = "rotate(" + s.heading_deg + "deg)";
+    const last = trackPts[trackPts.length - 1];
+    if (!last || distanceMeters(last[0], last[1], ll[0], ll[1]) > 1) {
+      trackPts.push(ll); flightPath.addLatLng(ll);
+      if (trackPts.length > 6000) { trackPts.splice(0, 2000); flightPath.setLatLngs(trackPts); }
+    }
+    if (!hasCentered) { map.setView(ll, Math.max(map.getZoom(), 18)); hasCentered = true; logEvent("Vehicle position acquired", "ok"); }
+    else if (Date.now() > followPausedUntil) map.panTo(ll, { animate: false });
+  }
+
+  // ---- Commands + slide-to-confirm ----
+  function send(o) { if (ws && ws.readyState === 1) { ws.send(JSON.stringify(o)); return true; } return false; }
+  const th = $("thumb"), sl = $("slider");
+  let dragging = false, frac = 0, confirmT = null;
+  function confirmAction(o) { // {title, text, extra, valid(), ok()}
+    if (pending) return;
+    pending = o;
+    $("c-title").textContent = o.title; $("c-text").textContent = o.text; $("c-extra").innerHTML = o.extra || "";
+    th.style.transition = "none"; th.style.transform = "translateX(0)";
+    $("confirm").classList.add("show");
+    confirmT = setTimeout(closeConfirm, 12000);
+  }
+  function closeConfirm() {
+    clearTimeout(confirmT); pending = null; dragging = false; $("confirm").classList.remove("show");
+  }
+  $("c-cancel").addEventListener("click", closeConfirm);
+  $("confirm").addEventListener("pointerdown", (e) => { if (e.target === $("confirm")) closeConfirm(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pending) closeConfirm(); });
+  th.addEventListener("pointerdown", (e) => { dragging = true; th.style.transition = "none"; th.setPointerCapture(e.pointerId); });
+  th.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const r = sl.getBoundingClientRect(), max = r.width - th.offsetWidth - 8;
+    const x = clamp(e.clientX - r.left - th.offsetWidth / 2, 0, max);
+    frac = x / max; th.style.transform = "translateX(" + x + "px)";
+  });
+  function releaseThumb() {
+    if (!dragging) return;
+    dragging = false;
+    if (frac >= 0.95) {
+      const p = pending;
+      if (p && p.valid()) p.ok(); else toast("Vehicle state changed — action cancelled", "warn");
+      closeConfirm();
+    } else { th.style.transition = "transform .2s"; th.style.transform = "translateX(0)"; }
+    frac = 0;
+  }
+  th.addEventListener("pointerup", releaseThumb); th.addEventListener("pointercancel", releaseThumb);
+
+  const okLink = () => wsOpen && linked && lastState;
+  function dispatch(cmd, label, lock, extra) {
+    if (!send(Object.assign({ cmd }, extra))) return toast("Bridge not connected", "bad");
+    busyUntil = Date.now() + lock; logEvent(label + " requested"); updateControls();
+  }
+  $("t-takeoff").addEventListener("click", () => {
+    if (!okLink()) return;
+    if (lastState.flying) {
+      confirmAction({ title: "Land", text: "Land at the current position?", valid: () => okLink() && lastState.flying, ok: () => dispatch("land", "Land", 3000) });
+    } else {
+      confirmAction({ title: "Takeoff", text: "The vehicle will arm and climb to the takeoff altitude.",
+        extra: '<label>Altitude<input id="c-alt" type="number" min="2" max="120" value="' + store.get("gcs.toAlt", 10) + '">m</label>',
+        valid: () => okLink() && !lastState.flying,
+        ok: () => { const a = clamp(parseFloat($("c-alt").value) || 10, 2, 120); store.set("gcs.toAlt", a); dispatch("takeoff", "Takeoff to " + a + " m", 8000, { alt: a }); } });
+    }
+  });
+  $("t-rtl").addEventListener("click", () => {
+    if (!okLink()) return;
+    confirmAction({ title: "Return", text: "Return to launch and land?", valid: () => okLink() && lastState.flying, ok: () => dispatch("rtl", "Return to launch", 3000) });
+  });
+  $("t-arm").addEventListener("click", () => {
+    if (!okLink()) return;
+    if (lastState.armed) confirmAction({ title: "Disarm", text: "Stop the motors?", valid: () => okLink() && lastState.armed && !lastState.flying, ok: () => dispatch("disarm", "Disarm", 3000) });
+    else confirmAction({ title: "Arm", text: "Motors will spin. Keep clear of the propellers.", valid: () => okLink() && !lastState.armed, ok: () => dispatch("arm", "Arm", 3000) });
+  });
+
+  // Buttons only enable when the action makes sense in the current vehicle state — and only for the operator.
+  const lowBatt = (s) => s.battery_pct != null && s.battery_pct >= 0 && s.battery_pct < LOW_BATTERY_PCT;
+  function updateControls() {
+    const s = lastState, ok = !!okLink() && isOperator, busy = Date.now() < busyUntil;
+    const fly = ok && s.flying, armed = ok && s.armed, mode = ok ? s.mode : "";
+    const landing = mode === "Land" || mode === "Precision Landing";
+    const tk = $("t-takeoff"), rt = $("t-rtl"), ar = $("t-arm");
+    $("t-takeoff-l").textContent = fly ? "Land" : "Takeoff";
+    $("t-arm-l").textContent = armed ? "Disarm" : "Arm";
+    tk.disabled = !ok || busy || (fly ? landing : (s.gps_fix == null || s.gps_fix < 3 || lowBatt(s)));
+    tk.title = !isOperator ? "View-only" : !ok ? "No vehicle" : fly ? (landing ? "Already landing" : "Land now") : (s.gps_fix == null || s.gps_fix < 3) ? "Needs a 3D GPS fix" : lowBatt(s) ? "Battery too low" : "Takeoff";
+    rt.disabled = !ok || busy || !fly || mode === "Return";
+    rt.title = !isOperator ? "View-only" : !fly ? "Only available in flight" : "Return to launch";
+    ar.disabled = !ok || busy || fly;
+    ar.title = !isOperator ? "View-only" : fly ? "Disabled in flight" : armed ? "Disarm" : "Arm";
+    if (pending && !pending.valid()) closeConfirm();
+    $("con-in").disabled = !wsOpen || !isOperator;
+  }
+
+  // ---- Console (PX4 NSH shell over MAVLink SERIAL_CONTROL) ----
+  let consoleOn = false, conBooted = false, hist = [], hIdx = 0;
+  function setConsole(on) {
+    consoleOn = on; $("log-panel").classList.toggle("flipped", on);
+    $("log-title").textContent = on ? "MAVLink Console" : "Event Log";
+    $("flip").textContent = on ? "Event log ⇄" : "MAVLink console ⇄";
+    if (on) { setTimeout(() => $("con-in").focus(), 500); if (!conBooted && wsOpen && isOperator) { conBooted = true; send({ cmd: "shell", data: "\n" }); } }
+  }
+  $("flip").addEventListener("click", () => setConsole(!consoleOn));
+  function conPrint(t) {
+    const o = $("con-out");
+    t = t.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r\n/g, "\n").replace(/\r/g, "");
+    o.textContent = (o.textContent + t).slice(-MAX_CON); o.scrollTop = o.scrollHeight;
+  }
+  $("con-in").addEventListener("keydown", (e) => {
+    const i = $("con-in");
+    if (e.key === "Enter") {
+      const v = i.value; if (v.trim()) { hist.push(v); hist = hist.slice(-50); }
+      hIdx = hist.length; i.value = ""; if (!send({ cmd: "shell", data: v + "\n" })) toast("Bridge not connected", "bad");
+    } else if (e.key === "ArrowUp") { if (hIdx > 0) i.value = hist[--hIdx]; e.preventDefault(); }
+    else if (e.key === "ArrowDown") { hIdx = Math.min(hIdx + 1, hist.length); i.value = hist[hIdx] || ""; e.preventDefault(); }
+    else if (e.key === "c" && e.ctrlKey && i.selectionStart === i.selectionEnd) { send({ cmd: "shell", data: "\x03" }); e.preventDefault(); }
+  });
+
+  // ---- Status / HUD ----
+  function flightSecs() { return armedAt ? Math.floor((Date.now() - armedAt) / 1000) : frozenT; }
+  function updateStatus() {
+    const s = lastState, dot = $("ready-dot"), txt = $("ready-text");
+    let state, cls = "";
+    if (!okLink()) state = "Disconnected";
+    else if (s.flying) { state = "Flying"; cls = "fly"; }
+    else if (s.armed) { state = "Armed"; cls = "warn"; }
+    else if (s.gps_fix != null && s.gps_fix < 3) { state = "Not Ready"; cls = "warn"; }
+    else { state = "Ready To Fly"; cls = "ok"; }
+    txt.textContent = state; dot.className = "state-dot " + cls;
+    const t = flightSecs(), p = (n) => String(n).padStart(2, "0");
+    $("h-time").textContent = p(Math.floor(t / 3600)) + ":" + p(Math.floor(t / 60) % 60) + ":" + p(t % 60);
+    const ld = $("link-dot"), lt = $("link-text");
+    if (!wsOpen) { ld.className = ""; lt.textContent = "Bridge: reconnecting"; }
+    else if (!linked) { ld.className = "warn"; lt.textContent = "Bridge OK · no vehicle"; }
+    else { ld.className = "live"; lt.textContent = "Vehicle linked · " + (isOperator ? "Operator" : "View-only"); }
+  }
+  function updateHud(s) {
+    $("stat-mode").textContent = s.mode || "—";
+    $("stat-gps").textContent = s.satellites != null ? s.satellites : "—";
+    const fx = ["No GPS", "No fix", "2D", "3D", "DGPS", "RTK float", "RTK fixed"][s.gps_fix];
+    $("stat-fix").textContent = (fx || "") + (s.hdop != null ? " · " + s.hdop.toFixed(1) : "");
+    $("gps-item").className = "tb-item data " + (s.gps_fix != null && s.gps_fix < 3 ? "c-bad" : s.satellites != null && s.satellites < 6 ? "c-warn" : "c-ok");
+    $("stat-rc").textContent = s.rc ? "RC" : "No RC";
+    $("stat-rssi").textContent = s.rc && s.rc_rssi != null ? s.rc_rssi + "%" : "";
+    $("rc-item").className = "tb-item data " + (s.rc ? "c-ok" : "c-bad");
+    if (s.battery_pct != null) {
+      const b = s.battery_pct, c = b < LOW_BATTERY_PCT ? "bad" : b < 50 ? "warn" : "ok";
+      $("stat-battery").textContent = b + "%"; $("batt-item").className = "tb-item data c-" + c;
+      const f = $("batt-fill"); f.style.height = b + "%"; f.style.background = c === "bad" ? "var(--red)" : c === "warn" ? "var(--amber)" : "var(--green)";
+    } else { $("stat-battery").textContent = "—"; $("batt-fill").style.height = "0"; }
+    $("stat-volt").textContent = s.voltage_v != null ? s.voltage_v.toFixed(1) + " V" : "";
+    $("h-alt").textContent = s.alt_m != null ? s.alt_m.toFixed(1) + " m" : "—";
+    $("h-spd").textContent = s.groundspeed_mps != null ? s.groundspeed_mps.toFixed(1) + " m/s" : "—";
+    $("h-home").textContent = homePoint && s.lat != null ? Math.round(distanceMeters(homePoint.lat, homePoint.lon, s.lat, s.lon)) + " m" : "—";
+    if (s.heading_deg != null) {
+      $("rose").setAttribute("transform", "rotate(" + (-s.heading_deg) + " 50 50)");
+      $("hdg-text").textContent = Math.round(s.heading_deg) + "°";
+    }
+    setModeStrip(s.mode);
+  }
+  function diffAndLog(s, p) {
+    if (s.armed !== p.armed) { logEvent(s.armed ? "Armed" : "Disarmed", s.armed ? "warn" : "ok"); busyUntil = 0; }
+    if (s.flying !== p.flying) { logEvent(s.flying ? "Airborne" : "Landed", "ok"); busyUntil = 0; }
+    if (s.mode && s.mode !== p.mode) logEvent("Flight mode → " + s.mode, s.mode === "Return" ? "warn" : "info");
+    if (s.rc !== p.rc) logEvent(s.rc ? "RC link restored" : "RC link lost", s.rc ? "ok" : "critical");
+    if (s.gps_fix != null && p.gps_fix != null && (s.gps_fix >= 3) !== (p.gps_fix >= 3)) logEvent(s.gps_fix >= 3 ? "GPS 3D fix acquired" : "GPS fix lost", s.gps_fix >= 3 ? "ok" : "critical");
+    if (s.battery_pct != null && p.battery_pct != null && s.battery_pct < LOW_BATTERY_PCT && p.battery_pct >= LOW_BATTERY_PCT)
+      logEvent("Battery below " + LOW_BATTERY_PCT + "%", "critical");
+  }
+
+  // ---- Alerts ----
+  function setAlert(msg, sev) {
+    const b = $("alert-banner");
+    b.classList.remove("show", "sev-warn", "sev-critical");
+    if (!msg) return;
+    $("alert-text").textContent = msg; b.classList.add("show", sev === "critical" ? "sev-critical" : "sev-warn");
+  }
+  function evaluateAlerts() {
+    const s = lastState;
+    updateStatus(); updateControls();
+    if (!wsOpen) return setAlert("Bridge link lost — reconnecting…", "critical");
+    if (!linked) return setAlert(everLinked ? "Vehicle link lost — no telemetry" : "Waiting for vehicle telemetry…", everLinked ? "critical" : "warn");
+    if (s.armed && !s.rc) return setAlert("RC link lost", "critical");
+    if (lowBatt(s)) return setAlert("Low battery — " + s.battery_pct + "% remaining", "critical");
+    if (s.mode === "Return") return setAlert("Return to launch active", "warn");
+    if (videoLostSince && (Date.now() - videoLostSince) / 1000 > LINK_LOSS_ALERT_S) return setAlert("Camera feed lost — retrying", "warn");
+    setAlert(null);
+  }
+  setInterval(evaluateAlerts, 500);
+
+  // ---- Telemetry websocket ----
+  const ACK_CMD = { 400: "Arm/Disarm", 22: "Takeoff", 176: "Mode change" };
+  const ACK_RES = ["Accepted", "Temporarily rejected", "Denied", "Unsupported", "Failed", "In progress", "Cancelled"];
+  function onState(s) {
+    const was = linked, prev = lastState;
+    linked = s.hb_age != null && s.hb_age < STALE_S;
+    document.body.classList.toggle("stale", !linked);
+    if (linked !== was) {
+      logEvent(linked ? "Vehicle connected" : "Vehicle link lost", linked ? "ok" : "critical");
+      if (linked) { everLinked = true; hasCentered = false; followPausedUntil = 0; }
+    }
+    if (linked) {
+      if (prev && was) diffAndLog(s, prev);
+      if (s.armed && !armedAt) { armedAt = Date.now(); frozenT = 0; }
+      else if (!s.armed && armedAt) { frozenT = flightSecs(); armedAt = null; }
+      updateHud(s); updateMap(s);
+    }
+    lastState = s; updateStatus(); updateControls();
+  }
+  function onMessage(m) {
+    if (m.type === "state") onState(m);
+    else if (m.type === "auth") {
+      if (m.ok && !isOperator) logEvent("Operator access granted", "ok");
+      else if (!m.ok && OP_KEY && !isOperator) logEvent("Operator token rejected — view-only", "warn");
+      isOperator = !!m.ok; updateControls();
+    }
+    else if (m.type === "ack") {
+      const n = ACK_CMD[m.command]; if (!n) return;
+      const r = ACK_RES[m.result] || "Result " + m.result, good = m.result === 0 || m.result === 5;
+      logEvent(n + ": " + r, good ? "ok" : "critical");
+      if (!good) { busyUntil = 0; toast(n + " " + r.toLowerCase(), "bad"); updateControls(); }
+    } else if (m.type === "text") {
+      logEvent(m.text, m.level);
+      if (m.level !== "info") toast(m.text, m.level === "critical" ? "bad" : "warn");
+    } else if (m.type === "console") conPrint(m.data);
+  }
+  function connectTelemetry() {
+    ws = new WebSocket(TELEMETRY_WS_URL);
+    ws.onopen = () => {
+      wsOpen = true; conBooted = false; logEvent("Bridge connected", "ok");
+      if (OP_KEY) send({ cmd: "auth", token: OP_KEY });
+      updateControls();
+    };
+    ws.onclose = () => {
+      if (wsOpen) logEvent("Bridge link dropped — reconnecting", "warn");
+      wsOpen = false; linked = false; isOperator = false; document.body.classList.add("stale"); closeConfirm();
+      setTimeout(connectTelemetry, 2000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } onMessage(m); };
+  }
+  connectTelemetry();
+</script>
+</body>
+</html>
